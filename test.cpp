@@ -33,6 +33,18 @@ void writeToFile(const std::string file, const std::string &s) {
     }
 }
 
+void test0() {
+    aho_corasick::trie trie;
+    trie.insert("ah");
+    trie.insert("ahah");
+
+    auto result = trie.parse_text("ahahahah");
+    for (auto i : result) {
+        std::cerr << i.first << " " << i.second << std::endl;
+    }
+    writeToFile("/tmp/test0.dot", trie.toDot());
+}
+
 void test1() {
     aho_corasick::trie trie;
     trie.insert("hers");
@@ -99,12 +111,11 @@ void test3() {
         assert(res.size() > 0);
         std::set<std::pair<std::size_t, std::size_t> > expected;
 
-//            for (auto &pattern : words) {
+
         for (std::size_t j = 0; j < words.size(); j++) {
             size_t pos = words[i].find(words[j], 0);
             while (pos != std::string::npos) {
                 expected.insert(std::make_pair(j, pos + words[j].size() - 1));
-//                    std::cerr << "expected in " << words[i] << ": " << pattern << " at pos " << (pos + pattern.size() - 1) << std::endl;
                 pos = words[i].find(words[j], pos + 1);
             }
         }
@@ -125,6 +136,7 @@ void test3() {
 
 
 int main() {
+    test0();
     test1();
     test2();
     test3();
