@@ -40,7 +40,7 @@ void test0() {
 
     auto result = trie.collect_matches("ahahahah");
     for (auto i : result) {
-        std::cerr << i.first << " " << i.second << std::endl;
+      std::cerr << "pos " << i.begin << " to " << i.end  << " matches " << i.v << std::endl;
     }
     writeToFile("/tmp/test0.dot", trie.toDot());
 }
@@ -53,7 +53,7 @@ void test1() {
     trie.insert("he");
     auto result = trie.collect_matches("ushers");
     for (auto i : result) {
-        std::cerr << i.first << " " << i.second << std::endl;
+      std::cerr << "pos " << i.begin << " to " << i.end  << " matches " << i.v << std::endl;
     }
     writeToFile("/tmp/blaat.dot", trie.toDot());
 }
@@ -78,7 +78,7 @@ void test2() {
     trie.map(std::vector<blaat>{blaat{2}}, 12);
     auto results = trie.collect_matches(std::vector<blaat>{blaat{6}, blaat{5}, blaat{2}, blaat{4}, blaat{5}});
     for (const auto &i : results) {
-        std::cerr << "vtype: " << i.first << " pos: " << i.second << " " << std::endl;
+      std::cerr << "pos " << i.begin << " to " << i.end  << " matches " << i.v << std::endl;
     }
 }
 
@@ -96,6 +96,7 @@ void test3() {
     }
 
     aho_corasick::basic_trie<std::string, std::size_t> trie;
+    typedef aho_corasick::basic_trie<std::string, std::size_t>::BeginEndValue bev;
     for (std::size_t i = 0; i < words.size(); i++) {
         trie.map(words[i], i);
 	assert(trie.getNoCreate(words[i]) && *trie.getNoCreate(words[i]) == i);
@@ -106,23 +107,27 @@ void test3() {
     std::cerr << " done" << std::endl;
     for (std::size_t i = 0; i < words.size(); i++) {
         std::cerr << i << " ";
-        std::set<std::pair<std::size_t, std::size_t> > expected;
+        std::set<bev > expected;
         for (std::size_t j = 0; j < words.size(); j++) {
             size_t pos = words[i].find(words[j], 0);
             while (pos != std::string::npos) {
-                expected.insert(std::make_pair(j, pos + words[j].size() - 1));
-                pos = words[i].find(words[j], pos + 1);
+	      
+	      expected.insert(bev{pos, pos + words[j].size(),*(new std::size_t(j))});
+	      pos = words[i].find(words[j], pos + 1);
             }
         }
-        std::set<std::pair<std::size_t, std::size_t> > actual;
+        std::set<bev > actual;
         {
             auto res = trie.collect_matches(words[i]);
             assert(res.size() > 0);
             for (const auto &r : res) {
                 actual.insert(r);
-
             }
         }
+	// std::cerr << expected.begin()->begin << " " << actual.begin()->begin << std::endl;
+	// std::cerr << expected.begin()->end << " " << actual.begin()->end << std::endl;
+	// std::cerr << expected.begin()->v << " " << actual.begin()->v << std::endl;
+	
         assert(expected == actual);
     }
 

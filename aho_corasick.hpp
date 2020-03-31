@@ -85,10 +85,12 @@ namespace aho_corasick {
         std::vector<std::pair<CharType, unique_ptr> > d_success;
         ptr d_failure;
         std::unique_ptr<value_type> payload; // every pattern gets only a single payload (value, whatever the pattern matches to), the submatches that end at the current position are failure-nodes of this node.
+        std::size_t depth; // not needed for the actual algo.
 
-        state() :
+        state(const std::size_t depth_ = 0) :
                 d_success(),
-                d_failure(nullptr) {
+                d_failure(nullptr),
+                depth(depth_) {
         }
 
         ptr lookupchild(const CharType &character) const {
@@ -106,7 +108,7 @@ namespace aho_corasick {
         ptr add_state(const CharType &character) {
             auto &p = getOrCreateOrderedUniqueKV(d_success, character);
             if (!p.get()) {
-                p.reset(new state<string_type, value_type>());
+                p.reset(new state<string_type, value_type>(depth + 1));
             }
             return p.get();
         }
@@ -119,19 +121,10 @@ namespace aho_corasick {
             return true;
         }
 
-        void collect_values(std::set<value_type> &c) const {
-            if (d_failure) {
-                d_failure->collect_values(c);
-            }
-            if (payload.get()) {
-                c.insert(*payload.get());
-            }
-        }
-
         bool iterate_values(const std::size_t pos,
-                            const std::function<bool(const value_type &, const std::size_t)> &fct) const {
+                            const std::function<bool(const value_type &, const std::size_t, const std::size_t)> &fct) const {
             if (payload.get()) {
-                if (!fct(*payload, pos)) {
+                if (!fct(*payload, pos - depth  + 1, pos + 1)) {
                     return false;
                 }
             }
@@ -158,6 +151,15 @@ namespace aho_corasick {
         basic_trie() :
                 d_root(new state_type()),
                 d_constructed_failure_states(false) {
+        }
+
+        template<typename iteratortype>
+        void map(const iteratortype &begin, const iteratortype &end, const std::function<void(std::unique_ptr<value_type> &ptr)> &setter) {
+            state_ptr_type cur_state = d_root.get();
+            for (auto i = begin; i != end; ++i) {
+                cur_state = cur_state->add_state(*i);
+            }
+            setter(cur_state->payload);
         }
 
         template<typename iteratortype>
@@ -199,24 +201,44 @@ namespace aho_corasick {
             return getNoCreate(s.begin(), s.end());
         }
 
+        struct BeginEndValue {
+            const std::size_t begin;
+            const std::size_t end;
+            const value_type &v;
 
-        std::vector<std::pair<value_type, std::size_t> > collect_matches(const string_type &v) {
+            bool operator<(const BeginEndValue &o) const {
+                if (begin == o.begin) {
+                    if (end == o.end) {
+                        return v < o.v;
+                    } else {
+                        return end < o.end;
+                    }
+                } else {
+                    return begin < o.begin;
+                }
+            }
+
+            bool operator==(const BeginEndValue &o) const {
+                return begin == o.begin && end == o.end && v == o.v;
+            }
+        };
+
+        std::vector<BeginEndValue> collect_matches(const string_type &v) {
             return collect_matches(v.begin(), v.end());
         }
 
         template<typename iteratortype>
-        std::vector<std::pair<value_type, std::size_t> > collect_matches(const iteratortype &begin, const iteratortype &end) {
+        std::vector<BeginEndValue> collect_matches(const iteratortype &begin, const iteratortype &end) {
             check_construct_failure_states();
             size_t pos = 0;
             state_ptr_type cur_state = d_root.get();
-            std::vector<std::pair<value_type, std::size_t> > hits;
+            std::vector<BeginEndValue > hits;
             for (auto i = begin; i != end; ++i) {
                 cur_state = get_state(cur_state, *i);
-                std::set<value_type> values;
-                cur_state->collect_values(values);
-                for (const auto &i : values) {
-                    hits.push_back(std::make_pair(i, pos));
-                }
+                cur_state->iterate_values(pos, [&hits](const value_type &v, const std::size_t b, const std::size_t e) {
+                    hits.push_back(BeginEndValue{b, e, v});
+                    return true;
+                }  );
                 pos++;
             }
             return hits;
@@ -226,7 +248,7 @@ namespace aho_corasick {
         void iterate_matches(
                 const iteratortype &begin,
                 const iteratortype &end,
-                const std::function<bool(const value_type &, const std::size_t)> &fct) {
+                const std::function<bool(const value_type &, const std::size_t, const std::size_t)> &fct) {
             check_construct_failure_states();
             size_t pos = 0;
             state_ptr_type cur_state = d_root.get();
@@ -293,11 +315,10 @@ namespace aho_corasick {
 
 
                 oss << (std::size_t) cur_state << " [label=\"";
-                std::set<value_type> values;
-                cur_state->collect_values(values);
-                for (auto &i : values) {
-                    oss << i << "\\" << "r";
-                }
+                cur_state->iterate_values(0, [&oss](const value_type &v, const std::size_t, const std::size_t) {
+                    oss << v << "\\" << "r";
+                    return true;
+                });
                 oss << "\"];" << std::endl;
                 for (const auto &char_child : cur_state->d_success) {
                     state_ptr_type target_state = char_child.second.get();// cur_state->next(transition,d_root);
