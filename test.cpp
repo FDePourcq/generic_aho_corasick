@@ -38,7 +38,7 @@ void test0() {
     trie.insert("ah");
     trie.insert("ahah");
 
-    auto result = trie.parse_text("ahahahah");
+    auto result = trie.collect_matches("ahahahah");
     for (auto i : result) {
         std::cerr << i.first << " " << i.second << std::endl;
     }
@@ -51,7 +51,7 @@ void test1() {
     trie.insert("his");
     trie.insert("she");
     trie.insert("he");
-    auto result = trie.parse_text("ushers");
+    auto result = trie.collect_matches("ushers");
     for (auto i : result) {
         std::cerr << i.first << " " << i.second << std::endl;
     }
@@ -76,7 +76,7 @@ void test2() {
     trie.map(std::vector<blaat>{blaat{4}}, 10);
     trie.map(std::vector<blaat>{blaat{5}, blaat{2}, blaat{4}}, 11);
     trie.map(std::vector<blaat>{blaat{2}}, 12);
-    auto results = trie.parse_text(std::vector<blaat>{blaat{6}, blaat{5}, blaat{2}, blaat{4}, blaat{5}});
+    auto results = trie.collect_matches(std::vector<blaat>{blaat{6}, blaat{5}, blaat{2}, blaat{4}, blaat{5}});
     for (const auto &i : results) {
         std::cerr << "vtype: " << i.first << " pos: " << i.second << " " << std::endl;
     }
@@ -89,10 +89,8 @@ void test3() {
     char *begin = (char *) words_uncut.c_str();
     std::size_t size = strcspn(begin, "\n");
 
-    while (size && words.size() < 100) {
-        if (size > 15) {
-            words.push_back(std::string(begin, begin + size));
-        }
+    while (size && words.size() < 1000000) {
+        words.push_back(std::string(begin, begin + size));
         begin += size + 1;
         size = strcspn(begin, "\n");
     }
@@ -100,18 +98,15 @@ void test3() {
     aho_corasick::basic_trie<std::string, std::size_t> trie;
     for (std::size_t i = 0; i < words.size(); i++) {
         trie.map(words[i], i);
+	assert(trie.getNoCreate(words[i]) && *trie.getNoCreate(words[i]) == i);
     }
     trie.check_construct_failure_states();
+    std::cerr << "writing dot-file ... "; 
     writeToFile("/tmp/test3.dot", trie.toDot());
-
+    std::cerr << " done" << std::endl;
     for (std::size_t i = 0; i < words.size(); i++) {
         std::cerr << i << " ";
-
-        auto res = trie.parse_text(words[i]);
-        assert(res.size() > 0);
         std::set<std::pair<std::size_t, std::size_t> > expected;
-
-
         for (std::size_t j = 0; j < words.size(); j++) {
             size_t pos = words[i].find(words[j], 0);
             while (pos != std::string::npos) {
@@ -119,16 +114,16 @@ void test3() {
                 pos = words[i].find(words[j], pos + 1);
             }
         }
-
-//            expected.insert(std::make_pair(words[i], words[i].size() - 1));
         std::set<std::pair<std::size_t, std::size_t> > actual;
-        for (const auto &r : res) {
-            actual.insert(r);
-//                std::cerr << "seen in " << words[i] << ": " << r.first << " at pos " << r.second << std::endl;
+        {
+            auto res = trie.collect_matches(words[i]);
+            assert(res.size() > 0);
+            for (const auto &r : res) {
+                actual.insert(r);
+
+            }
         }
-
         assert(expected == actual);
-
     }
 
 

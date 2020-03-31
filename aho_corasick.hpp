@@ -24,12 +24,11 @@
 #define AHO_CORASICK_HPP
 
 #include <algorithm>
-#include <map>
 #include <memory>
 #include <set>
 #include <queue>
 #include <vector>
-
+#include <functional>
 
 #ifndef AHO_CORASICK_NOEXTRAS
 
@@ -42,11 +41,34 @@
 namespace aho_corasick {
 
     template<class vector_type>
-    void insertOrderedUnique(vector_type &v, const typename vector_type::value_type &p) {
-        auto it = std::lower_bound(v.begin(), v.end(), p); // find proper position in descending order
-        if (it == v.end() || *it != p) {
-            v.insert(it, p);
+    const typename vector_type::value_type::second_type &getNoCreateOrderedUniqueKV(const vector_type &v, const typename vector_type::value_type::first_type &p) {
+        auto it = std::lower_bound(v.begin(),
+                                   v.end(),
+                                   p,
+                                   [](const typename vector_type::value_type &a,
+                                      const typename vector_type::value_type::first_type &p) {
+                                       return a.first < p;
+                                   }); // find proper position in descending order
+        if (it == v.end() || !(it->first == p)) {
+            static typename vector_type::value_type::second_type local_null = typename vector_type::value_type::second_type();
+            return local_null; //typename vector_type::value_type::second_type();
         }
+        return it->second;
+    }
+
+    template<class vector_type>
+    typename vector_type::value_type::second_type &getOrCreateOrderedUniqueKV(vector_type &v, const typename vector_type::value_type::first_type &p) {
+        auto it = std::lower_bound(v.begin(),
+                                   v.end(),
+                                   p,
+                                   [](const typename vector_type::value_type &a,
+                                      const typename vector_type::value_type::first_type &p) {
+                                       return a.first < p;
+                                   }); // find proper position in descending order
+        if (it == v.end() || !(it->first == p)) {
+            it = v.insert(it, std::make_pair(p, typename vector_type::value_type::second_type()));
+        }
+        return it->second;
     }
 
     // class state
@@ -60,20 +82,17 @@ namespace aho_corasick {
         typedef std::vector<ptr> state_collection;
         typedef std::vector<CharType> transition_collection;
 
-        std::map<CharType, unique_ptr> d_success;
+        std::vector<std::pair<CharType, unique_ptr> > d_success;
         ptr d_failure;
-        std::vector<value_type> values; // the values given by the user where the patterns map to. (presumably the user can use them to identify which pattern matched and more.)
+        std::unique_ptr<value_type> payload; // every pattern gets only a single payload (value, whatever the pattern matches to), the submatches that end at the current position are failure-nodes of this node.
 
         state() :
                 d_success(),
                 d_failure(nullptr) {
         }
 
-        ptr lookupchild(const CharType &character, ptr fallback = nullptr) const {
-            auto i = d_success.find(character);
-            if (i != d_success.end())
-                return i->second.get();
-            return fallback;
+        ptr lookupchild(const CharType &character) const {
+            return getNoCreateOrderedUniqueKV(d_success, character).get();
         }
 
         ptr next_state_no_failure(const CharType &c, ptr root) const {
@@ -85,23 +104,38 @@ namespace aho_corasick {
         }
 
         ptr add_state(const CharType &character) {
-            auto n = lookupchild(character);
-            if (!n) {
-                n = new state<string_type, value_type>();
-                d_success[character].reset(n);
+            auto &p = getOrCreateOrderedUniqueKV(d_success, character);
+            if (!p.get()) {
+                p.reset(new state<string_type, value_type>());
             }
-            return n;
+            return p.get();
         }
 
-        void add_value(const value_type &keyword) {
-            insertOrderedUnique(values, keyword);
+        bool set_value(const value_type &v) {
+            if (payload.get() && *payload.get() == v) {
+                return false;
+            }
+            payload.reset(new value_type(v));
+            return true;
         }
 
         void collect_values(std::set<value_type> &c) const {
             if (d_failure) {
                 d_failure->collect_values(c);
             }
-            c.insert(values.begin(), values.end());
+            if (payload.get()) {
+                c.insert(*payload.get());
+            }
+        }
+
+        bool iterate_values(const std::size_t pos,
+                            const std::function<bool(const value_type &, const std::size_t)> &fct) const {
+            if (payload.get()) {
+                if (!fct(*payload, pos)) {
+                    return false;
+                }
+            }
+            return d_failure ? d_failure->iterate_values(pos, fct) : true;
         }
 
     };
@@ -126,46 +160,57 @@ namespace aho_corasick {
                 d_constructed_failure_states(false) {
         }
 
-        void map(const string_type &keyword, const value_type &value) {
-            if (keyword.empty())
-                return;
+        template<typename iteratortype>
+        bool map(const iteratortype &begin, const iteratortype &end, const value_type &value) {
+            if (begin == end)
+                return false;
             state_ptr_type cur_state = d_root.get();
-            for (const auto &ch : keyword) {
-                cur_state = cur_state->add_state(ch);
+            for (auto i = begin; i != end; ++i) {
+                cur_state = cur_state->add_state(*i);
             }
-            cur_state->add_value(value);
-            d_constructed_failure_states = false;
+            if (cur_state->set_value(value)) {
+                d_constructed_failure_states = false;
+                return true;
+            }
+            return false;
         }
 
-        void insert(const string_type &keyword) {
-            if (keyword.empty())
-                return;
-            state_ptr_type cur_state = d_root.get();
-            for (const auto &ch : keyword) {
-                cur_state = cur_state->add_state(ch);
-            }
-            cur_state->add_value(keyword);
-            d_constructed_failure_states = false;
+        bool map(const string_type &keyword, const value_type &value) {
+            return map(keyword.begin(), keyword.end(), value);
         }
 
-        template<class InputIterator>
-        void insert(const InputIterator &first, const InputIterator &last) {
-            for (InputIterator it = first; first != last; ++it) {
-                insert(*it);
-            }
-        }
-
-        std::vector<std::pair<value_type, std::size_t> > parse_text(const string_type &v) {
-            return parse_text(v.begin(), v.end());
+        bool insert(const string_type &keyword) {
+            return map(keyword, keyword);
         }
 
         template<typename iteratortype>
-        std::vector<std::pair<value_type, std::size_t> > parse_text(const iteratortype &begin, const iteratortype &end) {
+        value_type *getNoCreate(const iteratortype &begin, const iteratortype &end) const { // use the trie as a ordinary map...
+            state_ptr_type cur_state = d_root.get();
+            for (auto i = begin; i != end; ++i) {
+                cur_state = cur_state->lookupchild(*i);
+                if (!cur_state) {
+                    return 0;
+                }
+            }
+            return cur_state->payload.get();
+        }
+
+        value_type *getNoCreate(const string_type &s) const { // use the trie as a ordinary map...
+            return getNoCreate(s.begin(), s.end());
+        }
+
+
+        std::vector<std::pair<value_type, std::size_t> > collect_matches(const string_type &v) {
+            return collect_matches(v.begin(), v.end());
+        }
+
+        template<typename iteratortype>
+        std::vector<std::pair<value_type, std::size_t> > collect_matches(const iteratortype &begin, const iteratortype &end) {
             check_construct_failure_states();
             size_t pos = 0;
             state_ptr_type cur_state = d_root.get();
             std::vector<std::pair<value_type, std::size_t> > hits;
-            for (auto i = begin; i != end; i++) {
+            for (auto i = begin; i != end; ++i) {
                 cur_state = get_state(cur_state, *i);
                 std::set<value_type> values;
                 cur_state->collect_values(values);
@@ -175,6 +220,23 @@ namespace aho_corasick {
                 pos++;
             }
             return hits;
+        }
+
+        template<typename iteratortype>
+        void iterate_matches(
+                const iteratortype &begin,
+                const iteratortype &end,
+                const std::function<bool(const value_type &, const std::size_t)> &fct) {
+            check_construct_failure_states();
+            size_t pos = 0;
+            state_ptr_type cur_state = d_root.get();
+            for (auto i = begin; i != end; ++i) {
+                cur_state = get_state(cur_state, *i);
+                if (!cur_state->iterate_values(pos, fct)) {
+                    return;
+                }
+                pos++;
+            }
         }
 
         state_ptr_type get_state(state_ptr_type cur_state, CharType c) const {
@@ -210,7 +272,6 @@ namespace aho_corasick {
 
                     state_ptr_type trace_failure_state = cur_state->d_failure;
                     while (trace_failure_state->next_state_no_failure(char_child.first, d_root.get()) == nullptr) {
-                        //assert(trace_failure_state != d_root.get());
                         trace_failure_state = trace_failure_state->d_failure;
                     }
                     target_state->d_failure = trace_failure_state->next_state_no_failure(char_child.first, d_root.get());
