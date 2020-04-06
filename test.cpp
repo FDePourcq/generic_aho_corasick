@@ -55,6 +55,14 @@ void test1() {
     for (auto i : result) {
       std::cerr << "pos " << i.begin << " to " << i.end  << " matches " << i.v << std::endl;
     }
+    std::string mmm = "ushers";
+    trie.iterate_matches(mmm,
+			 [&](const std::string& s,
+			     const std::string::const_iterator& begin,
+			     const std::string::const_iterator& end){
+			   std::cerr << "callbackfct: " << s  << " from " << (begin - mmm.begin()) << " to " << (end - mmm.begin())  << std::endl;;
+			   return true;
+			 });    
     writeToFile("/tmp/blaat.dot", trie.toDot());
 }
 

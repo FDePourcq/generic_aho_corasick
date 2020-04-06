@@ -105,14 +105,6 @@ namespace aho_corasick {
             return ret;
         }
 
-        ptr add_state(const CharType &character) {
-            auto &p = getOrCreateOrderedUniqueKV(d_success, character);
-            if (!p.get()) {
-                p.reset(new state<string_type, value_type>(depth + 1));
-            }
-            return p.get();
-        }
-
         bool set_value(const value_type &v) {
             if (payload.get() && *payload.get() == v) {
                 return false;
@@ -121,16 +113,26 @@ namespace aho_corasick {
             return true;
         }
 
-        bool iterate_values(const std::size_t pos,
-                            const std::function<bool(const value_type &, const std::size_t, const std::size_t)> &fct) const {
+        template<typename iteratortype, typename callbackfct>
+        bool iterate_values(const iteratortype &pos,
+                            const callbackfct &fct) const {
+
             if (payload.get()) {
-                if (!fct(*payload, pos - depth  + 1, pos + 1)) {
+                auto posbegin = pos; // todo: figure out how to do this the right way ...
+                for (std::size_t i = 0; i + 1 < depth; ++i) {
+                    --posbegin;
+                }
+                //	  std::advance(posbegin, -1 -(int)depth);
+                auto posend = pos;
+                ++posend;
+                //	  std::advance(posend, 1);
+
+                if (!fct(*payload, posbegin, posend)) {
                     return false;
                 }
             }
             return d_failure ? d_failure->iterate_values(pos, fct) : true;
         }
-
     };
 
     template<typename string_type, typename value_type>
@@ -144,7 +146,6 @@ namespace aho_corasick {
 
     private:
         std::unique_ptr<state_type> d_root;
-
         bool d_constructed_failure_states;
 
     public:
@@ -153,25 +154,23 @@ namespace aho_corasick {
                 d_constructed_failure_states(false) {
         }
 
+        state_ptr_type add_state(state_ptr_type cur_state, const CharType &character) {
+            auto &p = getOrCreateOrderedUniqueKV(cur_state->d_success, character);
+            if (!p.get()) {
+                p.reset(new state<string_type, value_type>(cur_state->depth + 1));
+                d_constructed_failure_states = false;
+            }
+            return p.get();
+        }
+
         template<typename iteratortype>
         void map(const iteratortype &begin, const iteratortype &end, const std::function<void(std::unique_ptr<value_type> &ptr)> &setter) {
-            state_ptr_type cur_state = d_root.get();
-            for (auto i = begin; i != end; ++i) {
-                cur_state = cur_state->add_state(*i);
-            }
-            setter(cur_state->payload);
+            setter(getNodeOrCreate(begin, end)->payload);
         }
 
         template<typename iteratortype>
         bool map(const iteratortype &begin, const iteratortype &end, const value_type &value) {
-            if (begin == end)
-                return false;
-            state_ptr_type cur_state = d_root.get();
-            for (auto i = begin; i != end; ++i) {
-                cur_state = cur_state->add_state(*i);
-            }
-            if (cur_state->set_value(value)) {
-                d_constructed_failure_states = false;
+            if (getNodeOrCreate(begin, end)->set_value(value)) {
                 return true;
             }
             return false;
@@ -186,7 +185,20 @@ namespace aho_corasick {
         }
 
         template<typename iteratortype>
-        value_type *getNoCreate(const iteratortype &begin, const iteratortype &end) const { // use the trie as a ordinary map...
+        state_ptr_type getNodeOrCreate(const iteratortype &begin, const iteratortype &end) {
+            state_ptr_type cur_state = d_root.get();
+            for (auto i = begin; i != end; ++i) {
+                cur_state = add_state(cur_state, *i);
+            }
+            return cur_state;
+        }
+
+        state_ptr_type getNodeOrCreate(const string_type &s) {
+            return getNodeOrCreate(s.begin(), s.end());
+        }
+
+        template<typename iteratortype>
+        state_ptr_type getNodeNoCreate(const iteratortype &begin, const iteratortype &end) const {
             state_ptr_type cur_state = d_root.get();
             for (auto i = begin; i != end; ++i) {
                 cur_state = cur_state->lookupchild(*i);
@@ -194,11 +206,45 @@ namespace aho_corasick {
                     return 0;
                 }
             }
-            return cur_state->payload.get();
+            return cur_state;
+        }
+
+        template<typename iteratortype>
+        value_type *getNoCreate(const iteratortype &begin, const iteratortype &end) const { // use the trie as a ordinary map...
+            state_ptr_type cur_state = getNodeNoCreate(begin, end);
+            if (cur_state) {
+                return cur_state->payload.get();
+            }
+            return 0;
         }
 
         value_type *getNoCreate(const string_type &s) const { // use the trie as a ordinary map...
             return getNoCreate(s.begin(), s.end());
+        }
+
+        template<typename iteratortype>
+        value_type &getOrCreate(const iteratortype &begin, const iteratortype &end) { // useful when the value_type is a container.
+            state_ptr_type cur_state = getNodeOrCreate(begin, end);
+            if (!cur_state->payload) {
+                cur_state->payload.reset(new value_type());
+            }
+            return *cur_state->payload;
+        }
+
+        value_type &getOrCreate(const string_type &s) { // useful when the value_type is a container.
+            return getorCreate(s.begin(), s.end());
+        }
+
+        template<typename iteratortype>
+        void erase(const iteratortype &begin, const iteratortype &end) const { // use the trie as a ordinary container...
+            state_ptr_type cur_state = getNodeNoCreate(begin, end);
+            if (cur_state) {
+                cur_state->payload.reset(); // cant remove the node because i dont know (cheaply) how many other nodes use this one as fail/fallback (besides that it can have children too of course)
+            }
+        }
+
+        void erase(const string_type &s) const { // use the trie as a ordinary container...
+            forget(s.begin(), s.end());
         }
 
         struct BeginEndValue {
@@ -232,33 +278,37 @@ namespace aho_corasick {
             check_construct_failure_states();
             size_t pos = 0;
             state_ptr_type cur_state = d_root.get();
-            std::vector<BeginEndValue > hits;
+            std::vector<BeginEndValue> hits;
             for (auto i = begin; i != end; ++i) {
                 cur_state = get_state(cur_state, *i);
-                cur_state->iterate_values(pos, [&hits](const value_type &v, const std::size_t b, const std::size_t e) {
+                cur_state->iterate_values(pos, [&hits](const value_type &v, const std::size_t &b, const std::size_t &e) {
                     hits.push_back(BeginEndValue{b, e, v});
                     return true;
-                }  );
+                });
                 pos++;
             }
             return hits;
         }
 
-        template<typename iteratortype>
+        template<typename iteratortype, typename callbackfct>
         void iterate_matches(
                 const iteratortype &begin,
                 const iteratortype &end,
-                const std::function<bool(const value_type &, const std::size_t, const std::size_t)> &fct) {
+                const callbackfct &fct) { //std::function<bool(const value_type &, const iteratortype&, const iteratortype&)>
             check_construct_failure_states();
-            size_t pos = 0;
             state_ptr_type cur_state = d_root.get();
             for (auto i = begin; i != end; ++i) {
                 cur_state = get_state(cur_state, *i);
-                if (!cur_state->iterate_values(pos, fct)) {
+                if (!cur_state->iterate_values(i, fct)) {
                     return;
                 }
-                pos++;
             }
+        }
+
+        template<typename callbackfct>
+        void iterate_matches(const string_type &s,
+                             const callbackfct &fct) {
+            iterate_matches(s.begin(), s.end(), fct);
         }
 
         state_ptr_type get_state(state_ptr_type cur_state, CharType c) const {
@@ -315,7 +365,7 @@ namespace aho_corasick {
 
 
                 oss << (std::size_t) cur_state << " [label=\"";
-                cur_state->iterate_values(0, [&oss](const value_type &v, const std::size_t, const std::size_t) {
+                cur_state->iterate_values((std::size_t) 0, [&oss](const value_type &v, const std::size_t &, const std::size_t &) {
                     oss << v << "\\" << "r";
                     return true;
                 });
