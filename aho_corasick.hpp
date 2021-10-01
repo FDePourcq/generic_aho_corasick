@@ -29,6 +29,7 @@
 #include <queue>
 #include <vector>
 #include <functional>
+#include <optional>
 
 #ifndef AHO_CORASICK_NOEXTRAS
 
@@ -41,13 +42,13 @@
 namespace aho_corasick {
 
     template<class vector_type>
-    const typename vector_type::value_type::second_type &getNoCreateOrderedUniqueKV(const vector_type &v, const typename vector_type::value_type::first_type &p) {
+    const typename vector_type::value_type::second_type &getNoCreateOrderedUniqueKV(const vector_type &v, const typename vector_type::value_type::first_type &p) noexcept {
         auto it = std::lower_bound(v.begin(),
                                    v.end(),
                                    p,
                                    [](const typename vector_type::value_type &a,
-                                      const typename vector_type::value_type::first_type &p) {
-                                       return a.first < p;
+                                      const typename vector_type::value_type::first_type &p_) {
+                                       return a.first < p_;
                                    }); // find proper position in descending order
         if (it == v.end() || !(it->first == p)) {
             static typename vector_type::value_type::second_type local_null = typename vector_type::value_type::second_type();
@@ -57,13 +58,13 @@ namespace aho_corasick {
     }
 
     template<class vector_type>
-    typename vector_type::value_type::second_type &getOrCreateOrderedUniqueKV(vector_type &v, const typename vector_type::value_type::first_type &p) {
+    typename vector_type::value_type::second_type &getOrCreateOrderedUniqueKV(vector_type &v, const typename vector_type::value_type::first_type &p) noexcept {
         auto it = std::lower_bound(v.begin(),
                                    v.end(),
                                    p,
                                    [](const typename vector_type::value_type &a,
-                                      const typename vector_type::value_type::first_type &p) {
-                                       return a.first < p;
+                                      const typename vector_type::value_type::first_type &p_) {
+                                       return a.first < p_;
                                    }); // find proper position in descending order
         if (it == v.end() || !(it->first == p)) {
             it = v.insert(it, std::make_pair(p, typename vector_type::value_type::second_type()));
@@ -72,32 +73,30 @@ namespace aho_corasick {
     }
 
     // class state
-    template<typename string_type, typename value_type>
+    template<typename symbol_type, typename value_type>
     class state {
     public:
-        using CharType = typename string_type::value_type;
-        typedef state<string_type, value_type> *ptr;
-        typedef std::unique_ptr<state<string_type, value_type>> unique_ptr;
-        typedef string_type &string_ref_type;
+        typedef state<symbol_type, value_type> *ptr;
+        typedef std::unique_ptr<state<symbol_type, value_type>> unique_ptr;
         typedef std::vector<ptr> state_collection;
-        typedef std::vector<CharType> transition_collection;
+        typedef std::vector<symbol_type> transition_collection;
 
-        std::vector<std::pair<CharType, unique_ptr> > d_success;
+        std::vector<std::pair<symbol_type, unique_ptr> > d_success;
         ptr d_failure;
-        std::unique_ptr<value_type> payload; // every pattern gets only a single payload (value, whatever the pattern matches to), the submatches that end at the current position are failure-nodes of this node.
+        std::optional<value_type> payload; // every pattern gets only a single payload (value, whatever the pattern matches to), the submatches that end at the current position are failure-nodes of this node.
         std::size_t depth; // not needed for the actual algo.
 
-        state(const std::size_t depth_ = 0) :
+        state(const std::size_t depth_ = 0) noexcept:
                 d_success(),
                 d_failure(nullptr),
                 depth(depth_) {
         }
 
-        ptr lookupchild(const CharType &character) const {
+        ptr lookupchild(const symbol_type &character) const noexcept {
             return getNoCreateOrderedUniqueKV(d_success, character).get();
         }
 
-        ptr next_state_no_failure(const CharType &c, ptr root) const {
+        ptr next_state_no_failure(const symbol_type &c, ptr root) const noexcept {
             auto ret = lookupchild(c);
             if (ret == nullptr && this == root) {
                 return root;
@@ -105,19 +104,19 @@ namespace aho_corasick {
             return ret;
         }
 
-        bool set_value(const value_type &v) {
-            if (payload.get() && *payload.get() == v) {
+        bool set_value(const value_type &v) noexcept {
+            if (payload.has_value() && *payload == v) {
                 return false;
             }
-            payload.reset(new value_type(v));
+            payload = v;
             return true;
         }
 
         template<typename iteratortype, typename callbackfct>
         bool iterate_values(const iteratortype &pos,
-                            const callbackfct &fct) const {
+                            const callbackfct &fct) const noexcept {
 
-            if (payload.get()) {
+            if (payload.has_value()) {
                 auto posbegin = pos; // todo: figure out how to do this the right way ...
                 for (std::size_t i = 0; i + 1 < depth; ++i) {
                     --posbegin;
@@ -135,57 +134,57 @@ namespace aho_corasick {
         }
     };
 
-    template<typename string_type, typename value_type>
+    template<typename symbol_type, typename value_type>
     class basic_trie {
     public:
-        using CharType = typename string_type::value_type;
 
-        typedef string_type &string_ref_type;
-        typedef state<string_type, value_type> state_type;
-        typedef state<string_type, value_type> *state_ptr_type;
+        typedef state<symbol_type, value_type> state_type;
+        typedef state<symbol_type, value_type> *state_ptr_type;
 
     private:
         std::unique_ptr<state_type> d_root;
         bool d_constructed_failure_states;
 
     public:
-        basic_trie() :
+        basic_trie() noexcept:
                 d_root(new state_type()),
                 d_constructed_failure_states(false) {
         }
 
-        state_ptr_type add_state(state_ptr_type cur_state, const CharType &character) {
+        state_ptr_type add_state(state_ptr_type cur_state, const symbol_type &character) noexcept {
             auto &p = getOrCreateOrderedUniqueKV(cur_state->d_success, character);
             if (!p.get()) {
-                p.reset(new state<string_type, value_type>(cur_state->depth + 1));
+                p.reset(new state<symbol_type, value_type>(cur_state->depth + 1));
                 d_constructed_failure_states = false;
             }
             return p.get();
         }
 
         template<typename iteratortype>
-        void map(const iteratortype &begin, const iteratortype &end, const std::function<void(std::unique_ptr<value_type> &ptr)> &setter) {
+        void map(const iteratortype &begin, const iteratortype &end, const std::function<void(std::optional<value_type> &ptr)> &setter) noexcept {
             setter(getNodeOrCreate(begin, end)->payload);
         }
 
         template<typename iteratortype>
-        bool map(const iteratortype &begin, const iteratortype &end, const value_type &value) {
+        bool map(const iteratortype &begin, const iteratortype &end, const value_type &value) noexcept {
             if (getNodeOrCreate(begin, end)->set_value(value)) {
                 return true;
             }
             return false;
         }
 
-        bool map(const string_type &keyword, const value_type &value) {
+        template<typename string_type>
+        bool map(const string_type &keyword, const value_type &value) noexcept {
             return map(keyword.begin(), keyword.end(), value);
         }
 
-        bool insert(const string_type &keyword) {
+        template<typename string_type>
+        bool insert(const string_type &keyword) noexcept {
             return map(keyword, keyword);
         }
 
         template<typename iteratortype>
-        state_ptr_type getNodeOrCreate(const iteratortype &begin, const iteratortype &end) {
+        state_ptr_type getNodeOrCreate(const iteratortype &begin, const iteratortype &end) noexcept {
             state_ptr_type cur_state = d_root.get();
             for (auto i = begin; i != end; ++i) {
                 cur_state = add_state(cur_state, *i);
@@ -193,12 +192,13 @@ namespace aho_corasick {
             return cur_state;
         }
 
+        template<typename string_type>
         state_ptr_type getNodeOrCreate(const string_type &s) {
             return getNodeOrCreate(s.begin(), s.end());
         }
 
         template<typename iteratortype>
-        state_ptr_type getNodeNoCreate(const iteratortype &begin, const iteratortype &end) const {
+        state_ptr_type getNodeNoCreate(const iteratortype &begin, const iteratortype &end) const noexcept {
             state_ptr_type cur_state = d_root.get();
             for (auto i = begin; i != end; ++i) {
                 cur_state = cur_state->lookupchild(*i);
@@ -210,40 +210,43 @@ namespace aho_corasick {
         }
 
         template<typename iteratortype>
-        value_type *getNoCreate(const iteratortype &begin, const iteratortype &end) const { // use the trie as a ordinary map...
+        value_type *getNoCreate(const iteratortype &begin, const iteratortype &end) const noexcept { // use the trie as a ordinary map...
             state_ptr_type cur_state = getNodeNoCreate(begin, end);
-            if (cur_state) {
-                return cur_state->payload.get();
+            if (cur_state && cur_state->payload.has_value()) {
+                return &*cur_state->payload;
             }
             return 0;
         }
 
-        value_type *getNoCreate(const string_type &s) const { // use the trie as a ordinary map...
+        template<typename string_type>
+        value_type *getNoCreate(const string_type &s) const noexcept { // use the trie as a ordinary map...
             return getNoCreate(s.begin(), s.end());
         }
 
         template<typename iteratortype>
-        value_type &getOrCreate(const iteratortype &begin, const iteratortype &end) { // useful when the value_type is a container.
+        value_type &getOrCreate(const iteratortype &begin, const iteratortype &end) noexcept { // useful when the value_type is a container.
             state_ptr_type cur_state = getNodeOrCreate(begin, end);
-            if (!cur_state->payload) {
-                cur_state->payload.reset(new value_type());
+            if (!cur_state->payload.has_value()) {
+                cur_state->payload.emplace(); // construct new value_type
             }
             return *cur_state->payload;
         }
 
-        value_type &getOrCreate(const string_type &s) { // useful when the value_type is a container.
-            return getorCreate(s.begin(), s.end());
+        template<typename string_type>
+        value_type &getOrCreate(const string_type &s) noexcept { // useful when the value_type is a container.
+            return getOrCreate(s.begin(), s.end());
         }
 
         template<typename iteratortype>
-        void erase(const iteratortype &begin, const iteratortype &end) const { // use the trie as a ordinary container...
+        void erase(const iteratortype &begin, const iteratortype &end) const noexcept { // use the trie as a ordinary container...
             state_ptr_type cur_state = getNodeNoCreate(begin, end);
             if (cur_state) {
                 cur_state->payload.reset(); // cant remove the node because i dont know (cheaply) how many other nodes use this one as fail/fallback (besides that it can have children too of course)
             }
         }
 
-        void erase(const string_type &s) const { // use the trie as a ordinary container...
+        template<typename string_type>
+        void erase(const string_type &s) const noexcept { // use the trie as a ordinary container...
             forget(s.begin(), s.end());
         }
 
@@ -252,7 +255,7 @@ namespace aho_corasick {
             const std::size_t end;
             const value_type &v;
 
-            bool operator<(const BeginEndValue &o) const {
+            bool operator<(const BeginEndValue &o) const noexcept {
                 if (begin == o.begin) {
                     if (end == o.end) {
                         return v < o.v;
@@ -264,24 +267,26 @@ namespace aho_corasick {
                 }
             }
 
-            bool operator==(const BeginEndValue &o) const {
+            bool operator==(const BeginEndValue &o) const noexcept {
                 return begin == o.begin && end == o.end && v == o.v;
             }
         };
 
-        std::vector<BeginEndValue> collect_matches(const string_type &v) {
+
+        template<typename string_type>
+        std::vector<BeginEndValue> collect_matches(const string_type &v) noexcept {
             return collect_matches(v.begin(), v.end());
         }
 
         template<typename iteratortype>
-        std::vector<BeginEndValue> collect_matches(const iteratortype &begin, const iteratortype &end) {
+        std::vector<BeginEndValue> collect_matches(const iteratortype &begin, const iteratortype &end) noexcept {
             check_construct_failure_states();
             size_t pos = 0;
             state_ptr_type cur_state = d_root.get();
             std::vector<BeginEndValue> hits;
             for (auto i = begin; i != end; ++i) {
                 cur_state = get_state(cur_state, *i);
-                cur_state->iterate_values(pos, [&hits](const value_type &v, const std::size_t &b, const std::size_t &e) {
+                cur_state->iterate_values(pos, [&hits](const value_type &v, const std::size_t &b, const std::size_t &e) noexcept {
                     hits.push_back(BeginEndValue{b, e, v});
                     return true;
                 });
@@ -294,7 +299,7 @@ namespace aho_corasick {
         void iterate_matches(
                 const iteratortype &begin,
                 const iteratortype &end,
-                const callbackfct &fct) { //std::function<bool(const value_type &, const iteratortype&, const iteratortype&)>
+                const callbackfct &fct) noexcept { //std::function<bool(const value_type &, const iteratortype&, const iteratortype&)>
             check_construct_failure_states();
             state_ptr_type cur_state = d_root.get();
             for (auto i = begin; i != end; ++i) {
@@ -305,13 +310,13 @@ namespace aho_corasick {
             }
         }
 
-        template<typename callbackfct>
+        template<typename callbackfct, typename string_type>
         void iterate_matches(const string_type &s,
-                             const callbackfct &fct) {
+                             const callbackfct &fct) noexcept {
             iterate_matches(s.begin(), s.end(), fct);
         }
 
-        state_ptr_type get_state(state_ptr_type cur_state, CharType c) const {
+        state_ptr_type get_state(state_ptr_type cur_state, symbol_type c) const noexcept {
             state_ptr_type result = cur_state->next_state_no_failure(c, d_root.get());
             while (result == nullptr) {
                 cur_state = cur_state->d_failure;
@@ -320,13 +325,13 @@ namespace aho_corasick {
             return result;
         }
 
-        void check_construct_failure_states() {
+        void check_construct_failure_states() noexcept {
             if (!d_constructed_failure_states) {
                 construct_failure_states();
             }
         }
 
-        void construct_failure_states() {
+        void construct_failure_states() noexcept {
             std::queue<state_ptr_type> q; // -> breadth-first iterative deepening...
             // root has no fail
             for (const auto &char_depth_one_state : d_root->d_success) {
@@ -354,9 +359,9 @@ namespace aho_corasick {
 
 #ifndef AHO_CORASICK_NOEXTRAS
 
-        std::string toDot() const {
+        std::string toDot() const noexcept {
             std::ostringstream oss;
-            oss << "digraph 123 { graph [rankdir=LR]; node [shape=box] " << std::endl;
+            oss << "digraph 123 { graph [rankdir=LR]; node [shape=box] \n";
             std::queue<state_ptr_type> q;
             q.push(d_root.get());
             while (!q.empty()) {
@@ -369,18 +374,18 @@ namespace aho_corasick {
                     oss << v << "\\" << "r";
                     return true;
                 });
-                oss << "\"];" << std::endl;
+                oss << "\"];\n";
                 for (const auto &char_child : cur_state->d_success) {
                     state_ptr_type target_state = char_child.second.get();// cur_state->next(transition,d_root);
                     q.push(target_state);
-                    oss << (std::size_t) cur_state << " -> " << (std::size_t) target_state << " [label=\"" << char_child.first << "\",color=green]" << std::endl;
+                    oss << (std::size_t) cur_state << " -> " << (std::size_t) target_state << " [label=\"" << char_child.first << "\",color=green]\n";
                 }
                 if (cur_state->d_failure && cur_state->d_failure != d_root.get()) {
-                    oss << (std::size_t) cur_state << " -> " << (std::size_t) cur_state->d_failure << " [color=red,constraint=false];" << std::endl;
+                    oss << (std::size_t) cur_state << " -> " << (std::size_t) cur_state->d_failure << " [color=red,constraint=false];\n";
                 }
             }
 
-            oss << "}" << std::endl;
+            oss << "}\n";
             return oss.str();
         }
 
@@ -389,8 +394,8 @@ namespace aho_corasick {
     };
 
 #ifndef AHO_CORASICK_NOEXTRAS
-    typedef basic_trie<std::basic_string<char>, std::basic_string<char> > trie;
-    typedef basic_trie<std::basic_string<wchar_t>, std::basic_string<wchar_t> > wtrie;
+    typedef basic_trie<char, std::basic_string<char> > trie;
+    typedef basic_trie<wchar_t, std::basic_string<wchar_t> > wtrie;
 #endif
 
 } // namespace aho_corasick
